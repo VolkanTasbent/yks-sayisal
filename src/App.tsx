@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Countdown } from "./Countdown";
 import { exams, subjects, type ExamId, type Subject, type Topic } from "./data/topics";
+import {
+  cleanHours,
+  JOURNAL_KEY,
+  loadJournal,
+  loadPlanStart,
+  sanitizeJournal,
+  type Journal as JournalData,
+} from "./exam";
+import { Journal } from "./Journal";
 
 const STORAGE_KEY = "yks-sayisal-v1";
 const MAX_SOLVED = 99999;
@@ -58,9 +68,13 @@ function normalize(value: string): string {
 }
 
 type Mode = "all" | "lesson" | "unsolved";
+type View = "topics" | "journal";
 
 export function App() {
   const [progress, setProgress] = useState<Progress>(loadProgress);
+  const [journal, setJournal] = useState<JournalData>(loadJournal);
+  const [planStart] = useState(loadPlanStart);
+  const [view, setView] = useState<View>("topics");
   const [exam, setExam] = useState<ExamId>("tyt");
   const [subjectId, setSubjectId] = useState("all");
   const [mode, setMode] = useState<Mode>("all");
@@ -71,6 +85,10 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
   }, [progress]);
+
+  useEffect(() => {
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify(journal));
+  }, [journal]);
 
   const examSubjects = useMemo(
     () => subjects.filter((subject) => subject.exam === exam),
@@ -133,14 +151,30 @@ export function App() {
     patch(id, { solved });
   }
 
+  function updateJournal(day: string, patch: Partial<{ hours: string; note: string }>) {
+    setJournal((current) => {
+      const previous = current[day] ?? { hours: "", note: "" };
+      const next = {
+        hours: patch.hours === undefined ? previous.hours : cleanHours(patch.hours),
+        note: patch.note === undefined ? previous.note : patch.note.slice(0, 2000),
+      };
+      const copy = { ...current };
+      if (!next.hours && !next.note.trim()) delete copy[day];
+      else copy[day] = next;
+      return copy;
+    });
+  }
+
   function downloadBackup() {
     const blob = new Blob(
       [
         JSON.stringify(
           {
-            version: 1,
+            version: 2,
             savedAt: new Date().toISOString(),
             progress,
+            journal,
+            planStart,
           },
           null,
           2,
@@ -158,8 +192,11 @@ export function App() {
 
   async function importBackup(file: File) {
     try {
-      const next = sanitizeProgress(JSON.parse(await file.text()));
-      setProgress(next);
+      const data = JSON.parse(await file.text()) as unknown;
+      setProgress(sanitizeProgress(data));
+      if (data && typeof data === "object" && "journal" in data) {
+        setJournal(sanitizeJournal((data as { journal: unknown }).journal));
+      }
       setMessage("Yedek yüklendi.");
     } catch {
       setMessage("Yedek dosyası okunamadı.");
@@ -213,8 +250,31 @@ export function App() {
         <div className="total-bar" aria-hidden="true">
           <span style={{ width: `${lessonRatio}%` }} />
         </div>
-        <p className="save-note">Bu tarayıcıda saklanır.</p>
+        <p className="save-note">Sayfa yenilense de silinmez. Kayıtlar bu tarayıcıda kalır.</p>
 
+        <div className="exam-switch" role="tablist" aria-label="Bölüm">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "topics"}
+            className={view === "topics" ? "on" : ""}
+            onClick={() => setView("topics")}
+          >
+            Konular
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "journal"}
+            className={view === "journal" ? "on" : ""}
+            onClick={() => setView("journal")}
+          >
+            Günlük
+          </button>
+        </div>
+
+        {view === "topics" ? (
+        <>
         <div className="exam-switch" role="tablist" aria-label="Sınav">
           {exams.map((item) => (
             <button
@@ -269,9 +329,16 @@ export function App() {
             );
           })}
         </nav>
+        </>
+        ) : null}
       </aside>
 
       <main className="main">
+        <Countdown />
+        {view === "journal" ? (
+          <Journal planStart={planStart} journal={journal} onChange={updateJournal} />
+        ) : (
+        <>
         <div className="filters">
           <div className="modes" role="group" aria-label="Liste süzgeci">
             <button type="button" className={mode === "all" ? "on" : ""} onClick={() => setMode("all")}>
@@ -312,6 +379,8 @@ export function App() {
               onSolved={setSolved}
             />
           ))
+        )}
+        </>
         )}
 
         <footer className="foot">
